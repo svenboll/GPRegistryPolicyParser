@@ -22,6 +22,7 @@ data LocalizedData
 }
 
 Import-LocalizedData  LocalizedData -filename GPRegistryPolicyParser.Strings.psd1
+
 # Add compatibility for Powershell Core which does not support 'encoding byte' via splatting
 if ( $PSVersionTable.PSVersion.Major -le "5")
     {
@@ -147,9 +148,9 @@ Function New-GPRegistryPolicy
         [Parameter(Position=4)]
         [object]
         $valueData = $null
-        )
+    )
 
-$Policy = [GPRegistryPolicy]::new($keyName, $valueName, $valueType, $valueLength, $valueData)
+    $Policy = [GPRegistryPolicy]::new($keyName, $valueName, $valueType, $valueLength, $valueData)
 
     return $Policy;
 }
@@ -264,7 +265,8 @@ Function Read-PolFile
             # REG_MULTI_SZ: multiple strings, delimited by \0, terminated by \0\0 (ASCII)
             if($valueType -eq [RegType]::REG_MULTI_SZ)
             {
-                [string] $value = [System.Text.Encoding]::UNICODE.GetString($policyContents[($index)..($index+$valueLength-3)])
+                [string] $rawValue = [System.Text.Encoding]::UNICODE.GetString($policyContents[($index)..($index + $valueLength - 3)])
+                $value = Format-MultiStringValue -MultiStringValue $rawValue
                 $index += $valueLength
             }
 
@@ -479,9 +481,22 @@ Function New-RegistrySettingsEntry
     # Get data bytes then compute byte size based on data and type
     switch ($RP.ValueType)
     {
-        { @([RegType]::REG_SZ, [RegType]::REG_EXPAND_SZ, [RegType]::REG_MULTI_SZ) -contains $_ }
+        {@([RegType]::REG_SZ, [RegType]::REG_EXPAND_SZ) -contains $_ }
             {
                 $dataBytes = [System.Text.Encoding]::Unicode.GetBytes($RP.ValueData + "`0")
+                $dataSize = $dataBytes.Count
+            }
+
+        ([RegType]::REG_MULTI_SZ)
+            {
+                <#
+                    When REG_MULTI_SZ ValueData contains an array, we need to null terminate each item. Furthermore
+                    "Data in the Data field to be interpreted as a sequence of characters terminated by two null Unicode
+                    characters, and within that sequence zero or more null-terminated Unicode strings can exist."
+                    https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-gpreg/5c092c22-bf6b-4e7f-b180-b20743d368f5
+                #>
+                $valueDataNullTermJoin = $RP.ValueData -join "`0"
+                $dataBytes = [System.Text.Encoding]::Unicode.GetBytes($valueDataNullTermJoin + "`0`0")
                 $dataSize = $dataBytes.Count
             }
 
@@ -493,7 +508,7 @@ Function New-RegistrySettingsEntry
 
         ([RegType]::REG_DWORD)
             {
-                $dataBytes = [System.BitConverter]::GetBytes([Int32]$RP.ValueData)
+                $dataBytes = [System.BitConverter]::GetBytes([Int32] ([string]$RP.ValueData))
                 $dataSize = 4
             }
 
@@ -725,6 +740,7 @@ Function IsRegistryKey
 
 Function Convert-StringToInt
 {
+    [OutputType([System.Int32[]])]
     param (
         [Parameter(Mandatory)]
         [ValidateNotNullOrEmpty()]
@@ -753,5 +769,45 @@ Function Convert-StringToInt
 
     return $result
 }
+
+<#
+    .SYNOPSIS
+        Formats a multistring value.
+
+    .DESCRIPTION
+        Formats a multistring value by first spliting on \0 and the removing the terminating \0\0.
+        This is need to match the desired valueData
+#>
+function Format-MultiStringValue
+{
+    [CmdletBinding()]
+    [OutputType([System.String[]])]
+    param
+    (
+        [Parameter()]
+        [System.Object]
+        $MultiStringValue
+    )
+
+    $result = @()
+    if ($MultiStringValue -match '\0')
+    {
+        [System.Collections.ArrayList] $array = $MultiStringValue.TrimEnd([char]0) -split '\0'
+
+        # Remove the terminating \0 from all indexes
+        foreach ($item in $array)
+        {
+            $result += $item.TrimEnd([char]0)
+        }
+
+        return $result
+    }
+    else
+    {
+        # If no terminating 0's are found split on whitespace
+        return (-split $MultiStringValue)
+    }
+}
+
 
 Export-ModuleMember -Function 'Read-PolFile','Read-RegistryPolicies','New-RegistrySettingsEntry','New-GPRegistryPolicyFile','Add-RegistryPolicies'
