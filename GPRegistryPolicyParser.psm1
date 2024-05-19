@@ -607,9 +607,8 @@ Function New-GPRegistryPolicyFile
         $Path
     )
 
-    $null = Remove-Item -Path $Path -Force -Verbose -ErrorAction SilentlyContinue
-
-    New-Item -Path $Path -Force -Verbose -ErrorAction Stop | Out-Null
+    $null = Remove-Item -Path $Path -Force -ErrorAction SilentlyContinue
+    New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
 
     [System.BitConverter]::GetBytes($script:REGFILE_SIGNATURE) | Add-Content -Path $Path @byteParam
     [System.BitConverter]::GetBytes($script:REGISTRY_FILE_VERSION) | Add-Content -Path $Path @byteParam
